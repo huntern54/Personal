@@ -3,7 +3,6 @@ Hunter Nghiem
 1001275883
 */
 
-
 #include <pthread.h>
 #include <semaphore.h>
 #include <unistd.h>
@@ -12,13 +11,12 @@ Hunter Nghiem
 #include <stdlib.h>
 #include <errno.h>
 #include <assert.h>
-
+#include <stdbool.h>
 /*** Constants that define parameters of the simulation ***/
 
 #define MAX_SEATS 3        /* Number of seats in the professor's office */
 #define professor_LIMIT 10 /* Number of students the professor can help before he needs a break */
 #define MAX_STUDENTS 1000  /* Maximum number of students in the simulation */
-
 #define CLASSA 0
 #define CLASSB 1
 
@@ -32,11 +30,16 @@ Hunter Nghiem
  * code that you develop.
  */
 
+//initialize semaphore so that the code will lock and unlock the threads
+sem_t semaphore;
+
 static int students_in_office;   /* Total numbers of students currently in the office */
 static int classa_inoffice;      /* Total numbers of students from class A currently in the office */
 static int classb_inoffice;      /* Total numbers of students from class B in the office */
 static int students_since_break = 0;
-
+static bool aThread;
+static bool bThread;
+static int lock;
 
 typedef struct
 {
@@ -59,6 +62,8 @@ static int initialize(student_info *si, char *filename)
   /* Initialize your synchronization variables (and
    * other variables you might use) here
    */
+   //sem_init semaphore to the value of one
+   sem_init(&semaphore, 0, 1);
 
 
   /* Read in the data file and initialize the student array */
@@ -87,8 +92,11 @@ static void take_break()
 {
   printf("The professor is taking a break now.\n");
   sleep(5);
-  assert( students_in_office == 0 );
+  assert(students_in_office == 0 );
   students_since_break = 0;
+
+
+
 }
 
 /* Code for the professor thread. This is fully implemented except for synchronization
@@ -97,6 +105,7 @@ static void take_break()
 void *professorthread(void *junk)
 {
   printf("The professor arrived and is starting his office hours\n");
+
 
   /* Loop while waiting for students to arrive. */
   while (1)
@@ -111,7 +120,32 @@ void *professorthread(void *junk)
     /* and whether the professor needs a break. You need to add   */
     /* all of this.                                               */
 
+
+    //used for when more than 10 students come into the classroom, so the students will not
+    // be allowed to come in until after his break is over
+    // the sleep will allow the threads to exit the classrooms and then allow the professor
+    //to fully stop and go to his break
+
+    if(students_since_break >= 10)
+    {
+      while(classb_inoffice != 0 && classa_inoffice != 0 )
+      {
+        lock = 1;
+        aThread = 1;
+        bThread = 1;
+        sleep(1);
+      }
+
+      if(classa_inoffice == 0 && classb_inoffice == 0)
+      {
+      take_break();
+      }
+    }
+
+
+
   }
+
   pthread_exit(NULL);
 }
 
@@ -126,11 +160,41 @@ void classa_enter()
   /* TODO */
   /* Request permission to enter the office.  You might also want to add  */
   /* synchronization for the simulations variables below                  */
-  /*  YOUR CODE HERE.                                                     */
+  /*  YOUR CODE HERE.
 
-  students_in_office += 1;
-  students_since_break += 1;
-  classa_inoffice += 1;
+  //checking if we can allow the students to enter the Office              */
+  sem_wait(&semaphore);
+  if(lock == 0 )
+  {
+    if(classb_inoffice  == 0 && students_in_office < 3)
+    {
+      bThread = 0;
+    }
+    else
+    {
+      bThread = 1;
+    }
+  }
+  while(classa_inoffice == professor_LIMIT)
+  {
+    bThread = 1;
+  }
+
+
+  sem_post(&semaphore);
+
+  while(bThread){}
+  if(bThread == 0)
+  {
+
+    sem_wait(&semaphore);
+    students_in_office += 1;
+    students_since_break += 1;
+    classa_inoffice += 1;
+    sem_post(&semaphore);
+  }
+
+
 
 }
 
@@ -146,13 +210,35 @@ void classb_enter()
   /* synchronization for the simulations variables below                  */
   /*  YOUR CODE HERE.                                                     */
 
+  //checking if we can allow the students to enter the Office                                                 */
+  sem_wait(&semaphore);
+  if(lock == 0)
+  {
+    if(classa_inoffice  == 0 && students_in_office < 3)
+    {
+      aThread = 0;
+    }
+    else
+    {
+      aThread = 1;
+    }
+  }
 
+
+  sem_post(&semaphore);
+  while(aThread){}
+
+  if(aThread == 0)
+  {
+
+  sem_wait(&semaphore);
   students_in_office += 1;
   students_since_break += 1;
   classb_inoffice += 1;
-
+  sem_post(&semaphore);
 }
 
+}
 /* Code executed by a student to simulate the time he spends in the office asking questions
  * You do not need to add anything here.
  */
@@ -173,9 +259,17 @@ static void classa_leave()
    *  YOUR CODE HERE.
    */
 
+  sem_wait(&semaphore);
   students_in_office -= 1;
   classa_inoffice -= 1;
 
+  if(classa_inoffice != 1)
+  {
+    aThread = true;
+
+  }
+
+  sem_post(&semaphore);
 }
 
 /* Code executed by a class B student when leaving the office.
@@ -188,9 +282,17 @@ static void classb_leave()
    * TODO
    * YOUR CODE HERE.
    */
+   sem_wait(&semaphore);
+   students_in_office -= 1;
+   classb_inoffice -= 1;
 
-  students_in_office -= 1;
-  classb_inoffice -= 1;
+   if(classb_inoffice != 1)
+   {
+     bThread = true;
+   }
+
+   sem_post(&semaphore);
+
 
 }
 
@@ -221,6 +323,7 @@ void* classa_student(void *si)
   classa_leave();
 
   printf("Student %d from class A leaves the office\n", s_info->student_id);
+  printf("how many still in office %d\n", students_in_office);
 
   assert(students_in_office <= MAX_SEATS && students_in_office >= 0);
   assert(classb_inoffice >= 0 && classb_inoffice <= MAX_SEATS);
@@ -255,6 +358,7 @@ void* classb_student(void *si)
   classb_leave();
 
   printf("Student %d from class B leaves the office\n", s_info->student_id);
+  printf("how many still in office %d\n", students_in_office);
 
   assert(students_in_office <= MAX_SEATS && students_in_office >= 0);
   assert(classb_inoffice >= 0 && classb_inoffice <= MAX_SEATS);
